@@ -12,13 +12,23 @@ let toastTimer;
 let switching = false;
 let sending = false;
 const sessions = new Map();
-const save = () => storage.set('hush-rooms', rooms.map(({ id, secret, access, name }) => ({ id, secret, access, name })));
+const save = () => storage.set('hush-rooms', rooms.map(({ id, secret, access, name, ownIds }) => ({ id, secret, access, name, ownIds })));
 function toast(text) { $('#toast').textContent = text; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 4200); }
 function profileUI() { $('#my-name').textContent = displayName; $('#my-avatar').textContent = displayName.slice(0, 2).toUpperCase(); }
 async function api(path, token, body, method = 'POST', signal) {
-  const response = await fetch(path, { method, signal, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
-  if (!response.ok) { const data = await response.json().catch(() => ({})); throw Object.assign(new Error(data.error || 'Connection failed. Please try again.'), { status: response.status }); }
-  return method === 'GET' ? response : response.json();
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  if (signal?.aborted) cancel(); else signal?.addEventListener('abort', cancel, { once: true });
+  const timeout = setTimeout(cancel, 10000);
+  try {
+    const response = await fetch(path, { method, signal: controller.signal, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    const data = await response.json();
+    if (!response.ok) throw Object.assign(new Error(data.error || 'Connection failed. Please try again.'), { status: response.status });
+    return data;
+  } catch (error) {
+    if (controller.signal.aborted && !signal?.aborted) throw new Error('The server took too long to respond. Check your connection and try again.');
+    throw error;
+  } finally { clearTimeout(timeout); signal?.removeEventListener('abort', cancel); }
 }
 function inviteURL(room = active?.room) {
   if (!room) throw new Error('Choose a room first.');
@@ -42,6 +52,7 @@ function renderRooms() {
   if (!list.childElementCount) list.append(element('p', 'no-results', filter ? 'No matching rooms.' : 'Your next conversation starts here.'));
 }
 function status(session, connected) {
+  if (!session) return;
   session.connected = connected;
   if (session !== active) return;
   $('#connection-dot').classList.toggle('connected', connected);
@@ -63,7 +74,7 @@ function renderMembers(session) {
   status(session, session.connected);
 }
 function renderMessage(message, session) {
-  const mine = message.sender === session.id;
+  const mine = session.ownIds.has(message.sender);
   const row = element('article', `message-row${mine ? ' mine' : ''}`);
   row.append(element('span', `avatar${mine ? ' me' : ''}`, message.name.slice(0, 2).toUpperCase()));
   const content = element('div', 'message-content');
@@ -85,7 +96,10 @@ async function receiveMessage(session, message, render = true) {
     const profile = await decrypt(session.key, message.profile, `${session.room.id}:profile:${message.sender}`);
     if (typeof body.text !== 'string' || body.text.length > 4000 || typeof profile.name !== 'string') throw new Error('Invalid message');
     const parsed = { ...message, name: profile.name.slice(0, 32), text: body.text };
+    // A send acknowledgement and a sync response can decrypt the same message concurrently.
+    if (session.seen.has(message.id)) return;
     session.seen.add(message.id); session.messages.push(parsed);
+    session.messages.sort((a, b) => a.sequence - b.sequence);
     if (session.messages.length > 200) session.messages.shift();
     if (render && session === active) renderConversation(session);
     else if (render) { session.unread = true; renderRooms(); }
@@ -109,33 +123,45 @@ async function connect(session) {
   let attempts = 0;
   while (!session.stopped) {
     const abort = new AbortController(); session.abort = abort;
-    let reader;
     try {
-      const response = await api(`/api/rooms/${session.room.id}/events`, session.token, null, 'GET', abort.signal);
-      reader = response.body.getReader();
+      // Finite requests avoid HTTP/1 stream limits and proxies that buffer SSE.
+      const update = await api(`/api/rooms/${session.room.id}/sync?after=${session.cursor}`, session.token, null, 'GET', abort.signal);
+      if (session.stopped) break;
+      for (const message of update.messages) await receiveMessage(session, message, false);
+      session.cursor = update.cursor;
+      await handleEvent(session, 'presence', update.members);
+      if (update.messages.length) {
+        if (session === active) renderConversation(session);
+        else { session.unread = true; renderRooms(); }
+      }
+      if (update.historyGap && session === active) toast('Some older messages expired while you were offline. Showing the recent history.');
       status(session, true); attempts = 0;
       if (session === active) $('#connection-error').hidden = true;
-      const decoder = new TextDecoder(); let buffer = '';
-      while (!session.stopped) {
-        const { value, done } = await reader.read(); if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let boundary;
-        while ((boundary = buffer.indexOf('\n\n')) !== -1) {
-          const block = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
-          const type = block.split('\n').find(line => line.startsWith('event: '))?.slice(7);
-          const data = block.split('\n').find(line => line.startsWith('data: '))?.slice(6);
-          if (type && data) await handleEvent(session, type, JSON.parse(data));
-        }
-      }
     } catch (error) {
       if (session.stopped) break;
-      if ([401, 403, 404].includes(error.status)) { status(session, false); if (session === active) showError(error); break; }
-    } finally { await reader?.cancel().catch(() => {}); }
-    status(session, false);
+      status(session, false);
+      if (error.status === 401) {
+        try { await rejoin(session); continue; } catch (joinError) { error = joinError; }
+      }
+      if ([403, 404].includes(error.status)) {
+        session.started = false;
+        if (session === active) showError(error);
+        break;
+      }
+      attempts++;
+      if (session === active) showError(new Error('Connection interrupted. Your draft is safe; reconnecting…'));
+    }
     if (session.stopped) break;
-    if (session === active) showError(new Error('Connection interrupted. Your draft is safe; reconnecting…'));
-    await new Promise(resolve => { session.retryTimer = setTimeout(resolve, Math.min(1000 * 2 ** attempts++, 10000)); session.wake = resolve; });
+    const delay = attempts ? Math.min(1000 * 2 ** (attempts - 1), 10000) : session === active ? 750 : 2500;
+    await new Promise(resolve => { session.retryTimer = setTimeout(resolve, delay); session.wake = resolve; });
   }
+}
+async function rejoin(session) {
+  const id = crypto.randomUUID();
+  const profile = await encrypt(session.key, { name: session.name }, `${session.room.id}:profile:${id}`);
+  const result = await api(`/api/rooms/${session.room.id}/join`, session.room.access, { id, profile });
+  session.id = id; session.token = result.memberToken; session.ownIds.add(id);
+  session.room.ownIds = [...session.ownIds]; save();
 }
 async function activate(room) {
   if (switching) return;
@@ -143,6 +169,12 @@ async function activate(room) {
   if (active) active.draft = $('#message-input').value;
   try {
     let session = sessions.get(room.id);
+    if (session) {
+      if (room.secret !== session.room.secret || room.access !== session.room.access) throw new Error('This invite does not match the saved room key.');
+      room = session.room;
+    } else {
+      room = rooms.find(saved => saved.id === room.id && saved.secret === room.secret && saved.access === room.access) || room;
+    }
     if (!session) {
       const key = await importRoomKey(room.secret);
       const id = crypto.randomUUID();
@@ -155,7 +187,9 @@ async function activate(room) {
         await api(`/api/rooms/${room.id}/leave`, result.memberToken).catch(() => {});
         throw new Error('The room key could not unlock this room. Check your invite link.');
       }
-      session = { room, key, id, token: result.memberToken, members: [], messages: [], seen: new Set(), connected: false, stopped: false, draft: '' };
+      const ownIds = new Set([...(Array.isArray(room.ownIds) ? room.ownIds : []), id]);
+      room.ownIds = [...ownIds];
+      session = { room, key, id, name: displayName, ownIds, token: result.memberToken, cursor: 0, members: [], messages: [], seen: new Set(), connected: false, stopped: false, draft: '' };
       sessions.set(room.id, session);
     }
     active = session; session.unread = false;
@@ -163,12 +197,13 @@ async function activate(room) {
     save(); storage.set('hush-active', room.id);
     history.replaceState(null, '', '/');
     $('#room-title').textContent = room.name; $('#details-name').textContent = room.name;
+    $('#room-code').textContent = `Room ${room.id.slice(0, 8)}`;
     document.title = `${room.name} · Hush`;
     $('#message-input').value = session.draft;
     $('#connection-error').hidden = true;
     renderRooms(); renderConversation(session); renderMembers(session); status(session, session.connected);
     $('.app').classList.remove('show-sidebar');
-    if (!session.started) { session.started = true; void connect(session); }
+    if (!session.started) { session.started = true; session.run = connect(session); }
   } finally { switching = false; }
 }
 async function createRoom(name) {
@@ -203,7 +238,11 @@ function joinDialog(invite = '') {
 function inviteDialog() {
   if (!active) return toast('Create or join a room first.');
   const input = field('Private invite link', 'invite', inviteURL(), '', true); input.querySelector('textarea').readOnly = true;
-  openDialog('Good things are shared.', 'Anyone with this link can join and read this room’s recent messages. Share it privately with people you trust.', [input], 'Copy invite link', async () => {
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+  const description = local
+    ? 'This localhost link works only on this computer. To chat across computers, open Hush through a shared HTTPS address first, then copy its invite. Anyone with the full invite can read recent messages.'
+    : 'Anyone with this full link can join this exact room and read recent messages. Share it privately. Creating a separate room with the same name will not connect you.';
+  openDialog('Good things are shared.', description, [input], 'Copy invite link', async () => {
     try { await navigator.clipboard.writeText(inviteURL()); toast('Invite copied. Send it to your people.'); return true; }
     catch { input.querySelector('textarea').select(); throw new Error('Select and copy the invite link above.'); }
   });
@@ -218,8 +257,12 @@ async function securityDialog() {
   }
   openDialog('Private by design.', 'Your message takes a trip. Its key stays with you.', fields, 'Got it', async () => true);
 }
-async function stopSession(session) {
+async function pauseSession(session) {
   session.stopped = true; session.abort?.abort(); clearTimeout(session.retryTimer); session.wake?.();
+  await session.run;
+}
+async function stopSession(session) {
+  await pauseSession(session);
   await api(`/api/rooms/${session.room.id}/leave`, session.token).catch(() => {});
   sessions.delete(session.room.id);
 }
@@ -243,16 +286,30 @@ $('#message-form').onsubmit = async event => {
   if (!session?.connected || !text || sending) return;
   sending = true; $('#send').disabled = true;
   try {
-    const id = crypto.randomUUID();
-    const payload = await encrypt(session.key, { text }, `${session.room.id}:message:${session.id}:${id}`);
-    await api(`/api/rooms/${session.room.id}/messages`, session.token, { id, sender: session.id, payload });
+    // Keep the same encrypted envelope on retry, including when an acknowledgement was lost.
+    if (!session.pending || session.pending.text !== text || session.pending.sender !== session.id) {
+      const id = crypto.randomUUID();
+      const sender = session.id;
+      const payload = await encrypt(session.key, { text }, `${session.room.id}:message:${sender}:${id}`);
+      session.pending = { text, id, sender, payload };
+    }
+    const { id, sender, payload } = session.pending;
+    const result = await api(`/api/rooms/${session.room.id}/messages`, session.token, { id, sender, payload });
+    if (result.message) await receiveMessage(session, result.message);
+    session.pending = null;
     if (active === session && $('#message-input').value === original) $('#message-input').value = '';
     session.draft = '';
   } catch (error) { toast(error.message); }
-  finally { sending = false; status(active, active.connected); $('#message-input').focus(); }
+  finally { sending = false; status(active, active?.connected); if (active === session) $('#message-input').focus(); }
 };
 $('#reconnect').onclick = async () => {
-  try { if (active) { const room = active.room; await stopSession(active); await activate(room); } else await boot(); } catch (error) { showError(error); }
+  try {
+    if (active) {
+      const session = active;
+      await pauseSession(session);
+      session.stopped = false; session.started = true; session.run = connect(session);
+    } else await boot();
+  } catch (error) { showError(error); }
 };
 $('#leave-room').onclick = () => {
   if (!active) return;
@@ -268,7 +325,7 @@ $('.main').addEventListener('click', event => { if (!event.target.closest('#menu
 $('#details-toggle').onclick = () => { if (matchMedia('(max-width:1150px)').matches) $('.app').classList.toggle('show-details'); else $('.app').classList.toggle('details-hidden'); };
 $('#close-details').onclick = () => { $('.app').classList.remove('show-details'); if (!matchMedia('(max-width:1150px)').matches) $('.app').classList.add('details-hidden'); };
 document.addEventListener('keydown', event => { if (event.key === '/' && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName) && !$('#dialog').open) { event.preventDefault(); $('.app').classList.add('show-sidebar'); $('#room-search').focus(); } });
-window.addEventListener('pagehide', () => { for (const session of sessions.values()) { session.stopped = true; session.abort?.abort(); fetch(`/api/rooms/${session.room.id}/leave`, { method: 'POST', headers: { Authorization: `Bearer ${session.token}` }, keepalive: true }).catch(() => {}); } });
+window.addEventListener('pagehide', () => { for (const session of sessions.values()) { session.stopped = true; session.abort?.abort(); clearTimeout(session.retryTimer); session.wake?.(); fetch(`/api/rooms/${session.room.id}/leave`, { method: 'POST', headers: { Authorization: `Bearer ${session.token}` }, keepalive: true }).catch(() => {}); } });
 window.addEventListener('pageshow', event => { if (event.persisted) location.reload(); });
 async function boot() {
   profileUI(); renderRooms();

@@ -104,3 +104,64 @@ test('static application has security headers and cannot read arbitrary files', 
   assert.equal((await fetch(`${f.base}/server.mjs`)).status, 404);
   assert.equal((await fetch(`${f.base}/package.json`)).status, 404);
 });
+
+test('finite sync relays encrypted messages to three clients, tracks cursors and enforces room access', async t => {
+  const f = await fixture(t); const room = await f.room(); const other = await f.room('Separate room');
+  const users = await Promise.all(['Alice', 'Bob', 'Charlie'].map(name => f.join(room, name)));
+  for (const user of users) {
+    const response = await f.api(`/api/rooms/${room.id}/sync?after=0`, user.memberToken, null, 'GET');
+    assert.equal(response.status, 200); assert.equal((await response.json()).cursor, 0);
+  }
+  const sender = users[0].id, id = crypto.randomUUID(), context = `${room.id}:message:${sender}:${id}`;
+  const payload = await encrypt(room.key, { text: 'Only for our three clients' }, context);
+  const ack = await (await f.api(`/api/rooms/${room.id}/messages`, users[0].memberToken, { id, sender, payload })).json();
+  assert.equal(ack.message.id, id);
+  for (const user of users) {
+    const response = await f.api(`/api/rooms/${room.id}/sync?after=0`, user.memberToken, null, 'GET');
+    const data = await response.json(); assert.equal(data.messages.length, 1); assert.equal(data.members.length, 3);
+    assert.equal(JSON.stringify(data).includes('Only for our three clients'), false);
+    assert.equal(JSON.stringify(data).includes('Alice'), false);
+    assert.equal((await decrypt(room.key, data.messages[0].payload, context)).text, 'Only for our three clients');
+    const next = await (await f.api(`/api/rooms/${room.id}/sync?after=${data.cursor}`, user.memberToken, null, 'GET')).json();
+    assert.deepEqual(next.messages, []);
+  }
+  assert.equal((await f.api(`/api/rooms/${other.id}/sync`, users[0].memberToken, null, 'GET')).status, 401);
+  assert.equal((await f.api(`/api/rooms/${room.id}/sync?after=999`, users[0].memberToken, null, 'GET')).status, 400);
+  await f.api(`/api/rooms/${room.id}/leave`, users[2].memberToken);
+  const left = await (await f.api(`/api/rooms/${room.id}/sync`, users[0].memberToken, null, 'GET')).json();
+  assert.equal(left.members.length, 2);
+});
+
+test('history is bounded to 200 encrypted messages and sync reports a retention gap', async t => {
+  const f = await fixture(t); const room = await f.room();
+  const users = await Promise.all(Array.from({ length: 10 }, (_, i) => f.join(room, `Member ${i}`)));
+  for (let i = 0; i < 202; i++) {
+    const user = users[i % users.length]; const id = crypto.randomUUID();
+    const payload = await encrypt(room.key, { text: `Message ${i}` }, `${room.id}:message:${user.id}:${id}`);
+    assert.equal((await f.api(`/api/rooms/${room.id}/messages`, user.memberToken, { id, sender: user.id, payload })).status, 200);
+  }
+  const response = await f.api(`/api/rooms/${room.id}/sync?after=1`, users[0].memberToken, null, 'GET');
+  const data = await response.json(); assert.equal(data.cursor, 202); assert.equal(data.messages.length, 200);
+  assert.equal(data.historyGap, true); assert.equal(data.messages[0].sequence, 3);
+});
+
+test('the 50-person room limit is enforced even for simultaneous joins', async t => {
+  const f = await fixture(t); const room = await f.room();
+  const results = await Promise.all(Array.from({ length: 51 }, async (_, i) => {
+    const id = crypto.randomUUID(); const profile = await encrypt(room.key, { name: `Member ${i}` }, `${room.id}:profile:${id}`);
+    return (await f.api(`/api/rooms/${room.id}/join`, room.access, { id, profile })).status;
+  }));
+  assert.equal(results.filter(status => status === 200).length, 50);
+  assert.equal(results.filter(status => status === 409).length, 1);
+});
+
+test('message bursts are rate limited without accepting the excess message', async t => {
+  const f = await fixture(t); const room = await f.room(); const user = await f.join(room, 'Alice');
+  for (let i = 0; i < 31; i++) {
+    const id = crypto.randomUUID(); const payload = await encrypt(room.key, { text: `Burst ${i}` }, `${room.id}:message:${user.id}:${id}`);
+    const result = await f.api(`/api/rooms/${room.id}/messages`, user.memberToken, { id, sender: user.id, payload });
+    assert.equal(result.status, i < 30 ? 200 : 429);
+  }
+  const state = await (await f.api(`/api/rooms/${room.id}/sync`, user.memberToken, null, 'GET')).json();
+  assert.equal(state.messages.length, 30);
+});

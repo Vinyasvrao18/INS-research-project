@@ -43,19 +43,19 @@ export function createChatServer() {
       const url = new URL(req.url, 'http://localhost');
       if (req.method === 'GET' && url.pathname === '/api/health') return send(res, 200, { ok: true });
       if (req.method === 'POST' && url.pathname === '/api/rooms') {
-        if (rooms.size >= 200) fail(503, 'The server is full. Please try later.');
         const ip = req.socket.remoteAddress;
         const limit = createLimits.get(ip) || { count: 0, start: Date.now() };
         if (Date.now() - limit.start > 3600000) { limit.count = 0; limit.start = Date.now(); }
         if (++limit.count > 30) fail(429, 'Room creation limit reached. Try again in an hour.');
         createLimits.set(ip, limit);
         const body = await readJSON(req);
+        if (rooms.size >= 200) fail(503, 'The server is full. Please try later.');
         if (!UUID.test(body.id) || !SECRET.test(body.accessToken) || !envelope(body.metadata, 2048)) fail(400, 'Invalid room.');
         if (rooms.has(body.id)) fail(409, 'Room already exists.');
-        rooms.set(body.id, { id: body.id, accessHash: digest(body.accessToken), metadata: body.metadata, members: new Map(), history: [], ids: new Set(), usedIVs: new Set([body.metadata.iv]), touched: Date.now() });
+        rooms.set(body.id, { id: body.id, accessHash: digest(body.accessToken), metadata: body.metadata, members: new Map(), history: [], ids: new Set(), usedIVs: new Set([body.metadata.iv]), sequence: 0, touched: Date.now() });
         return send(res, 201, { id: body.id });
       }
-      const match = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]{36})\/(join|events|messages|leave)$/i);
+      const match = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]{36})\/(join|events|sync|messages|leave)$/i);
       if (match) {
         const [, id, action] = match;
         const room = rooms.get(id);
@@ -63,20 +63,31 @@ export function createChatServer() {
         const token = req.headers.authorization?.replace(/^Bearer /, '') || '';
         if (action === 'join' && req.method === 'POST') {
           if (!equalSecret(token, room.accessHash)) fail(403, 'The invite does not grant access to this room.');
-          if (room.members.size >= 50) fail(409, 'This room has reached its 50-person limit.');
           const body = await readJSON(req);
+          if (room.members.size >= 50) fail(409, 'This room has reached its 50-person limit.');
           if (!UUID.test(body.id) || !envelope(body.profile, 2048)) fail(400, 'Invalid profile.');
           if (room.members.has(body.id)) fail(409, 'This session already joined.');
           if (room.usedIVs.has(body.profile.iv)) fail(409, 'Encryption nonce already used.');
           room.usedIVs.add(body.profile.iv);
           const memberToken = randomBytes(32).toString('base64url');
-          room.members.set(body.id, { id: body.id, profile: body.profile, tokenHash: digest(memberToken), stream: null, seen: Date.now(), count: 0, window: Date.now() });
+          room.members.set(body.id, { id: body.id, profile: body.profile, tokenHash: digest(memberToken), stream: null, polled: 0, seen: Date.now(), count: 0, window: Date.now() });
           room.touched = Date.now();
           return send(res, 200, { memberToken, metadata: room.metadata });
         }
         const member = [...room.members.values()].find(m => equalSecret(token, m.tokenHash));
         if (!member) fail(401, 'Session expired. Reopen this room to reconnect.');
         member.seen = room.touched = Date.now();
+        if (action === 'sync' && req.method === 'GET') {
+          const after = Number(url.searchParams.get('after') || 0);
+          if (!Number.isSafeInteger(after) || after < 0 || after > room.sequence) fail(400, 'Invalid message cursor.');
+          member.polled = Date.now();
+          return send(res, 200, {
+            cursor: room.sequence,
+            messages: room.history.filter(message => message.sequence > after),
+            members: [...room.members.values()].filter(m => m.stream || Date.now() - m.polled < 15000).map(m => ({ id: m.id, profile: m.profile })),
+            historyGap: after > 0 && room.history.length > 0 && after < room.history[0].sequence - 1,
+          });
+        }
         if (action === 'events' && req.method === 'GET') {
           if (member.stream) member.stream.end();
           res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
@@ -93,15 +104,15 @@ export function createChatServer() {
           const body = await readJSON(req);
           if (!UUID.test(body.id) || body.sender !== member.id || !envelope(body.payload)) fail(400, 'Invalid encrypted message.');
           // A retry is acknowledged without broadcasting the same message twice.
-          if (room.ids.has(body.id)) return send(res, 200, { accepted: true, duplicate: true });
+          if (room.ids.has(body.id)) return send(res, 200, { accepted: true, duplicate: true, message: room.history.find(m => m.id === body.id && m.sender === member.id) });
           if (room.usedIVs.has(body.payload.iv)) fail(409, 'Encryption nonce already used.');
           if (room.ids.size >= 10000) fail(409, 'This room is full. Create a new room to continue.');
           room.ids.add(body.id); room.usedIVs.add(body.payload.iv);
-          const message = { id: body.id, sender: member.id, profile: member.profile, payload: body.payload, time: new Date().toISOString() };
+          const message = { id: body.id, sequence: ++room.sequence, sender: member.id, profile: member.profile, payload: body.payload, time: new Date().toISOString() };
           room.history.push(message);
           if (room.history.length > 200) room.history.shift();
           broadcast(room, 'message', message);
-          return send(res, 200, { accepted: true });
+          return send(res, 200, { accepted: true, message });
         }
         if (action === 'leave' && req.method === 'POST') {
           room.members.delete(member.id); member.stream?.end(); presence(room);

@@ -4,6 +4,16 @@
   "private": true,
   "type": "module",
   "description": "Private group rooms with browser-side encryption and a ciphertext-only relay.",
-  "scripts": { "start": "node server.mjs", "dev": "node --watch server.mjs", "test": "node --test test/*.test.mjs" },
-  "engines": { "node": ">=22" }
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs",
+    "share": "node share.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "jsdom": "26.1.0"
+  }
 }

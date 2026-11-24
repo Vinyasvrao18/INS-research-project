@@ -45,3 +45,16 @@ test('invalid PORT gives a clear configuration error', { timeout: 10000 }, async
   assert.match(app.output().stderr, /Invalid PORT/);
   assert.doesNotMatch(app.output().stderr, /RangeError|Unhandled/);
 });
+
+test('share command gives installation help and stops when cloudflared is unavailable', { timeout: 10000 }, async t => {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path'));
+  env.PATH = '';
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../share.mjs', import.meta.url))], {
+    env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  t.after(() => { if (child.exitCode === null) child.kill(); });
+  let stderr = ''; child.stderr.on('data', chunk => { stderr += chunk; });
+  const [code] = await once(child, 'close');
+  assert.equal(code, 1); assert.match(stderr, /cloudflared is not installed/);
+  assert.match(stderr, /developers.cloudflare.com/);
+});
