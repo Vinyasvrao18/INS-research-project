@@ -21,6 +21,27 @@ The server defaults to `127.0.0.1:3000`. Set `HOST=0.0.0.0` and `PORT` as enviro
 
 **For people on different devices:** host this Node application behind an HTTPS reverse proxy and share that HTTPS address. Localhost links work only on the same computer. HTTPS is required for Web Crypto outside localhost. Keep streaming responses unbuffered and allow long-lived SSE connections. The proxy must preserve the original Host header (for example, Nginx `proxy_set_header Host $http_host; proxy_buffering off;`). This application needs a continuously running Node server; GitHub Pages alone cannot run its backend.
 
+## Port already in use (`EADDRINUSE`)
+
+Another process is listening on the requested port. Press **Ctrl+C** to stop the failed watcher, then choose another port.
+
+Linux/macOS:
+
+```sh
+PORT=3001 npm run dev
+```
+
+Windows PowerShell:
+
+```powershell
+$env:PORT="3001"
+npm run dev
+```
+
+Open **http://localhost:3001** on the computer running the server. If that port is occupied too, use `PORT=0` to let the operating system choose a free port and open the exact URL printed by Hush. The chosen port may change when the watcher restarts.
+
+If Hush is already running in another terminal, you can instead keep using that instance, or stop it there with **Ctrl+C** before starting another. To inspect port 3000 on Linux without stopping anything, run `ss -ltnp 'sport = :3000'`. Do not stop an unfamiliar process just to free the port.
+
 ## How messages travel
 
 ```mermaid

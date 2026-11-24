@@ -136,5 +136,26 @@ export function createChatServer() {
 if (typeof process !== 'undefined' && process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT || 3000);
   const host = process.env.HOST || '127.0.0.1';
-  createChatServer().listen(port, host, () => console.log(`Hush is running at http://${host}:${port}`));
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    console.error('Invalid PORT. Use a whole number from 0 to 65535 (0 chooses a free port).');
+    process.exitCode = 1;
+  } else {
+    const server = createChatServer();
+    server.on('error', error => {
+      if (error.code === 'EADDRINUSE') {
+        console.error(`Hush could not start: ${host}:${port} is already in use.`);
+        console.error('Stop an earlier Hush instance with Ctrl+C in its terminal, or choose another port:');
+        console.error('  Linux/macOS: PORT=3001 npm run dev');
+        console.error('  PowerShell:  $env:PORT="3001"; npm run dev');
+        console.error('Then open http://localhost:3001 (on the computer running Hush).');
+      } else {
+        console.error(`Hush could not start (${error.code || 'error'}): ${error.message}`);
+      }
+      process.exitCode = 1;
+    });
+    server.listen(port, host, () => {
+      const addressHost = host.includes(':') ? `[${host}]` : host;
+      console.log(`Hush is running at http://${addressHost}:${server.address().port}`);
+    });
+  }
 }
