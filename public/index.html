@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f7f8f2"><meta name="description" content="A little space for private conversations. End-to-end encrypted group chat."><title>Hush — a little more private.</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='20' fill='%23d4ef81'/%3E%3Ctext x='18' y='47' font-family='Arial' font-size='48' font-weight='bold' fill='%23232c22'%3Eh%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="/styles.css"><script type="module" src="/app.js"></script></head>
+<body>
+<svg class="sprite" xmlns="http://www.w3.org/2000/svg"><defs>
+<symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 24 24"><path d="m5 12 14 0m-6-6 6 6-6 6"/></symbol>
+<symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 1-8 8H4l1.5-4A8 8 0 1 1 20 11Z"/><path d="M8 10h8m-8 4h5"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/></symbol>
+<symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3m1-16a3 3 0 0 1 0 6m2 4a5 5 0 0 1 3 5"/></symbol>
+<symbol id="i-link" viewBox="0 0 24 24"><path d="m10 14 4-4m-6 6-2 2a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m4 0 2-2a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0" transform="translate(1 -1)"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></symbol>
+<symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+<symbol id="i-send" viewBox="0 0 24 24"><path d="m21 3-7 18-4-7-7-4L21 3Zm0 0L10 14"/></symbol>
+<symbol id="i-server" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="7" rx="2"/><rect x="4" y="14" width="16" height="7" rx="2"/><path d="M8 6.5h.01M8 17.5h.01m4-11h4m-4 11h4"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+<symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+<symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 4H4v16h5m3-8h9m-4-4 4 4-4 4"/></symbol>
+<symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z"/></symbol>
+</defs></svg>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="/" aria-label="Hush home"><span class="brand-mark"><svg><use href="#i-chat"/></svg></span>hush<span class="brand-dot">.</span></a>
+    <p class="brand-caption">A little more private.</p>
+    <button class="button primary new-room"><svg><use href="#i-plus"/></svg> Create a room <span class="button-end">↗</span></button>
+    <label class="search"><svg><use href="#i-search"/></svg><input id="room-search" placeholder="Find a conversation" aria-label="Find a conversation"><kbd>/</kbd></label>
+    <div class="section-label">YOUR ROOMS <span id="room-count">0</span></div>
+    <nav id="room-list" aria-label="Your rooms"></nav>
+    <button class="join-link" id="join-room"><svg><use href="#i-link"/></svg> Join with an invite</button>
+    <div class="sidebar-bottom">
+      <div class="privacy-note"><span class="small-icon"><svg><use href="#i-shield"/></svg></span><h3>Good conversations.<br>Just between you.</h3><p>Your words are encrypted before<br>they ever leave your device.</p><button id="privacy-info">How Hush works <span>↗</span></button></div>
+      <button class="profile-button" id="edit-profile"><span class="avatar me" id="my-avatar">Y</span><span><strong id="my-name">You</strong><small>Your profile · edit name</small></span><span class="profile-edit">↗</span></button>
+    </div>
+  </aside>
+  <main class="main">
+    <header class="room-header">
+      <button class="icon-button mobile-menu" id="menu" aria-label="Toggle room list"><svg><use href="#i-menu"/></svg></button>
+      <span class="room-icon"><svg><use href="#i-chat"/></svg></span>
+      <div class="room-heading"><h1 id="room-title">The common room</h1><p><span class="status-dot" id="connection-dot"></span><span id="connection-status">Connecting…</span><span class="divider-dot">·</span><span>Private room</span></p></div>
+      <button class="button invite-button" id="invite"><svg><use href="#i-plus"/></svg> Invite people</button>
+      <button class="icon-button" id="details-toggle" aria-label="Toggle room details"><svg><use href="#i-users"/></svg></button>
+    </header>
+    <div class="secure-banner"><svg><use href="#i-lock"/></svg> A private space. Every message is end-to-end encrypted. <button id="banner-info" aria-label="About encryption">↗</button></div>
+    <div id="connection-error" class="connection-error" hidden><span></span><button id="reconnect">Reconnect</button></div>
+    <section class="conversation" id="conversation" aria-label="Conversation">
+      <div class="date-divider"><span id="today-label">TODAY</span></div>
+      <div class="welcome" id="welcome">
+        <div class="welcome-art" aria-hidden="true"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><span class="art-spark">✧</span><div class="art-bubble bubble-back"><i></i><i></i><i></i></div><div class="art-bubble bubble-front"><svg><use href="#i-lock"/></svg></div><span class="art-dot"></span></div>
+        <span class="eyebrow">A SPACE THAT’S YOURS</span>
+        <h2>Big ideas. Small talk.<br>All between us.</h2>
+        <p>Bring your people together. Share a thought, make a plan,<br class="desktop-break"> or just say hello. Your conversation starts here.</p>
+        <button class="button dark" id="welcome-invite"><svg><use href="#i-link"/></svg> Invite your people <svg><use href="#i-arrow"/></svg></button>
+        <div class="welcome-benefits"><span><svg><use href="#i-lock"/></svg> Encrypted by default</span><span><svg><use href="#i-users"/></svg> Better together</span><span><svg><use href="#i-spark"/></svg> No account needed</span></div>
+      </div>
+      <div id="messages" role="log" aria-live="polite" aria-relevant="additions"></div>
+    </section>
+    <div class="composer-wrap"><form id="message-form"><div class="composer"><textarea id="message-input" rows="1" maxlength="4000" placeholder="A thought worth sharing…" aria-label="Message" disabled></textarea><div class="composer-actions"><span><svg><use href="#i-lock"/></svg><span>Only for this room</span></span><button class="send-button" id="send" type="submit" aria-label="Send message" disabled><svg><use href="#i-arrow"/></svg></button></div></div></form><div class="composer-hint"><span>Be yourself. You’re in good company.</span><span><kbd>Enter</kbd> to send <span class="hint-dot">·</span> <kbd>Shift + Enter</kbd> for a new line</span></div></div>
+  </main>
+  <aside class="details" id="details">
+    <div class="details-heading"><h2>The little details</h2><button class="icon-button" id="close-details" aria-label="Close details"><svg><use href="#i-close"/></svg></button></div>
+    <div class="room-summary"><span class="summary-icon"><svg><use href="#i-chat"/></svg></span><h3 id="details-name">The common room</h3><span class="private-pill"><svg><use href="#i-lock"/></svg> Invite-only room</span></div>
+    <div class="members-heading"><h3>In the room</h3><span id="member-count">0</span></div><div id="members"></div>
+    <button class="add-people" id="add-people"><span>+</span> There’s room for your people</button>
+    <div class="encryption-card"><span class="encryption-icon"><svg><use href="#i-shield"/></svg></span><h3>Private from end to end.</h3><p>Your device locks it.<br>Their device unlocks it.<br>The server only passes it along.</p><div class="encryption-flow"><span><svg><use href="#i-lock"/></svg><small>You</small></span><i>···</i><span><svg><use href="#i-server"/></svg><small>Server</small></span><i>···</i><span><svg><use href="#i-lock"/></svg><small>Them</small></span></div><button id="security-details">A closer look <span>↗</span></button></div>
+    <button class="leave-room" id="leave-room"><svg><use href="#i-logout"/></svg> Leave this room</button><div class="details-footer"><span class="tiny-logo">hush.</span><span>Less noise. More connection.</span></div>
+  </aside>
+</div>
+<dialog id="dialog"><form id="dialog-form"><div class="dialog-heading"><span class="dialog-icon"><svg><use href="#i-chat"/></svg></span><button class="icon-button" id="dialog-close" type="button" aria-label="Close dialog"><svg><use href="#i-close"/></svg></button></div><h2 id="dialog-title"></h2><p id="dialog-description"></p><div id="dialog-fields"></div><p class="form-error" id="dialog-error" role="alert"></p><button class="button primary dialog-submit" id="dialog-submit" type="submit"></button></form></dialog>
+<div class="toast" id="toast" role="status" hidden></div>
+</body></html>
